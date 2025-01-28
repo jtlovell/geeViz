@@ -1,0 +1,19 @@
+Package: geeviz
+Type: Package
+Title: Genome-wide visualization tools
+Version: 0.1.0
+Author: JT Lovell
+Maintainer: JT Lovell <jlovell@hudsonalpha.org>
+Description: Tools for genome visualization, binning, and quality control
+    especially for exploration of multiple related genomes. 
+Imports: Biostrings, 
+  GenomicRanges, 
+  Rsamtools, 
+  data.table,
+  rtracklayer,
+  methods,
+  GENESPACE
+License: file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.2

@@ -1,0 +1,58 @@
+
+
+bin_genome <- function(dnaSS,
+                       geneGR,
+                       repeatGR,
+                       cenGR,
+                       cenBuff = 500e3,
+                       teloBuff = 500e3,
+                       windowSize = 1e6,
+                       windowStep = 50e3){
+
+}
+
+
+
+library(geeviz)
+
+repGff3File <- "/Users/jlovell/Downloads/download.20250123.151645/Phytozome/PhytozomeV13/Tarvensevar_MN106/v4.1/annotation/Tarvensevar_MN106_872_v4.1.repeatmasked_assembly_v4.0.gff3.gz"
+geneGff3File <- "/Users/jlovell/Desktop/pennycressCSP/genomes/MN106/Tarvensevar_MN106_872_v4.1.gene.gff3.gz"
+assemFaFile <- "/Users/jlovell/Desktop/pennycressCSP/genomes/MN106/Tarvensevar_MN106_872_v4.0.fa.gz"
+
+# -- parameters
+hierarchical <- TRUE
+windowSize <- 1e6
+windowStep <- 50e3
+
+# -- read in the fasta, rename the chrs
+dnaSS <- Biostrings::readDNAStringSet(assemFaFile)
+names(dnaSS) <- gsub("\\s.*", "", names(dnaSS))
+
+# -- read in the cds and repeats, join
+cdsGr <- read_gffAsGr(
+  gff3File = geneGff3File,
+  filter = list(type = "gene"),
+  reduceIt = TRUE)
+cdsGr$class <- "CDS"
+
+repGr <- read_gffAsGr(
+  gff3File = repGff3File,
+  extraCol2keep = "class",
+  reduceIt = TRUE)
+grs <- c(cdsGr, repGr)
+
+grd <- window_gr(
+  x = dnaSS,
+  width = windowSize,
+  step = windowStep)
+
+# 1. reduce the query within each group
+qgr1 <- reduce_grByGroup(grs)
+
+# 2. if hierarchical, subtract each preceding group from the next
+qgr2 <- make_hierarchical(qgr1)
+
+# 3. count overlaps for each group
+cnts <- count_overlapsByGroup(
+  y = grd,
+  x = qgr2)

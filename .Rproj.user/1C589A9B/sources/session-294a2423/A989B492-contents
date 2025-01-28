@@ -1,0 +1,340 @@
+repGff3File <- "/Users/jlovell/Downloads/download.20250123.151645/Phytozome/PhytozomeV13/Tarvensevar_MN106/v4.1/annotation/Tarvensevar_MN106_872_v4.1.repeatmasked_assembly_v4.0.gff3.gz"
+geneGff3File <- "/Users/jlovell/Desktop/pennycressCSP/genomes/MN106/Tarvensevar_MN106_872_v4.1.gene.gff3.gz"
+assemFaFile <- "/Users/jlovell/Desktop/pennycressCSP/genomes/MN106/Tarvensevar_MN106_872_v4.0.fa.gz"
+chrNamesStrip <- "\\s.*"
+
+kmerSeqs <- fread("/Users/jlovell/Downloads/MN106_processed_repeats (1).csv")
+kmerSeqs <- c(kmerSeqs$consensus.primary, kmerSeqs$consensus.secondary)
+kmerSeqs <- kmerSeqs[!duplicated(kmerSeqs)]
+kmerSeqs <- DNAStringSet(kmerSeqs[grepl("A|C|G|T", kmerSeqs)])
+
+cenKmerSS = kmerSeqs
+cenKmerGap = 500
+
+cens2mask <- makeGRangesFromDataFrame(
+  fread("/Users/jlovell/Downloads/MN106_satellite_regions_20250127.csv",
+        col.names = c("chr", "start", "end", "id")))
+
+cenRegs <- fread(
+  "/Users/jlovell/Desktop/pennycressCSP/Thlaspi_centromere_candidate_regions20241202.csv",
+  select = c(1:4), col.names = c("seqnames", "start", "end", "genome"))
+cenRegs[,width := end - start]
+setorder(cenRegs, genome, seqnames, -width)
+cenRegs <- subset(cenRegs, !duplicated(paste(genome, seqnames)))
+cens <- makeGRangesFromDataFrame(subset(cenRegs, genome == "MN106"))
+cens$grp <- "centromere"
+
+# -- 1. read in the fasta, rename the chrs
+ss <- Biostrings::readDNAStringSet(assemFaFile)
+names(ss) <- gsub(chrNamesStrip, "", names(ss))
+
+# -- 2. read in the cds
+geneGr <- read_gffAsGr(
+  gff3File = geneGff3File,
+  filter = list(type = c("CDS", "gene")),
+  reduceIt = TRUE,
+  extraCol2keep = "type")
+geneGr$type[geneGr$type == "gene"] <- "intron"
+
+# -- 3. read in the repeats
+repGr <- read_gffAsGr(
+  gff3File = repGff3File,
+  extraCol2keep = "class",
+  reduceIt = TRUE)
+repGr$type <- repGr$class
+repGr$class <- NULL
+
+# -- 4. If centromere sequences are given, find them
+if(!is.null(cenKmerSS)){
+  cenGr <- pull_kmerBlocks(
+    kmerSS = cenKmerSS,
+    assemblySS = ss,
+    maxGap2join = cenKmerGap)
+  cenGr$type <- "cenKmers"
+  cenGr$matchProp <- cenGr$matchBases <- NULL
+  feats <- c(geneGr, repGr, cenGr)
+}else{
+  feats <- c(geneGr, repGr)
+}
+
+
+
+# -- 5. combine and sort by annotation type
+featureOrder <- NULL
+if(is.null(featureOrder)){
+  featureOrder <- unique(feats$type)
+  wh <- c(grep("CDS|EXON", toupper(featureOrder)),
+          grep("CENK", toupper(featureOrder)),
+          grep("CDS|EXON|CENK|UNKNOWN|INTRON", toupper(featureOrder), invert = T),
+          grep("INTRON", toupper(featureOrder)),
+          grep("UNKNOWN", toupper(featureOrder)))
+  wh <- wh[!duplicated(wh)]
+  if(length(wh) < length(featureOrder)){
+    al <- 1:length(featureOrder)
+    mis <- al[!al %in% wh]
+    wh <- c(wh, mis)
+  }
+  featureOrder <- featureOrder[wh]
+}
+feats$type <- factor(feats$type, levels = featureOrder)
+feats <- feats[order(feats$type),]
+feats$type <- as.character(feats$type)
+feats$type <- gsub("[^[:alnum:] ]", "", feats$type)
+
+# -- 6. Process the input so that it is hierarchical
+featsH <- make_hierarchical(feats)
+
+
+featuresGr = featsH
+trainingGr = NULL
+dnaSS = ss
+centromeres = cens
+maskGr = NULL
+width = 1e6
+step = 50e3
+teloKmers = c("CCCGAAA", "CCCTAAA")
+stripChrName = "\\s.*"
+teloBuffer = 50e3
+centroBuffer = 1e6
+subteloMinGeneDensity = .1
+pericenMaxGeneDensity = 0.25
+trainWidth = width * 2
+minProb2assign = .75
+ignoreCentromeres = TRUE
+minRunLength = ceiling((0.5 *width)/step)
+verbose = TRUE
+
+tst <- classify_genome(
+  featuresGr = featsH,
+  trainingGr = NULL,
+  dnaSS = ss,
+  # maskGr = cens2mask,
+  centromeres = cens,
+  width = 500e3,
+  step = 10e3,
+  teloBuffer = 10e3,
+  centroBuffer = 1e6,
+  trainWidth = 3e6,
+  minProb2assign = .75,
+  ignoreCentromeres = F)
+
+
+test <- subset(c(intronGr, cdsGr, cenGr2, repGr), seqnames == "Chr01")
+test$class <- factor(test$class, )
+
+
+tmp <- data.table(cl = repGr$class, width = width(repGr))[,list(nbp = sum(width)), by = "cl"]
+dropThese <- tmp$cl[tmp$nbp < 2e6]
+repGr$class[repGr$class %in% dropThese] <- "other"
+repGr <- reduce_grByGroup(repGr)
+
+
+# -- centromeres
+
+
+cenGr <- pull_kmerBlocks(
+  kmerSS = kmerSeqs,
+  assemblySS = ss,
+  maxGap2join = 100)
+cenGr2 <- cenGr; cenGr2$matchBases <- cenGr2$matchProp <- NULL
+cenGr2$class <- "cen"
+feats <- make_hierarchical(c(cdsGr, cenGr2, repGr, intronGr))
+tmp <- data.table(cl = feats$class, width = width(feats))[,list(nbp = sum(width)), by = "cl"]
+
+
+
+
+
+
+# feats$class <- ifelse(grepl("Copia", feats$class), "Copia",
+#                     ifelse(grepl("Gypsy", feats$class), "Ty3",
+#                            ifelse(grepl("CDS", feats$class), "CDS",
+#                                   ifelse(grepl("missing", feats$class), "unannotated", "otherRepeat"))))
+
+
+
+linChrs <- linearize_chrCoords(
+  x = ss,
+  stripChrName = "//s.*",
+  gapSize = 5e6)
+
+
+
+names(ss) <- gsub(stripChrName, "", names(ss))
+grid <- window_gr(x = ss, width = 500e3, step = 100e3)
+grid$grp <- 1
+feats2p <- feats
+feats2p$class <- ifelse(grepl("Copia", feats2p$class), "Copia",
+                     ifelse(grepl("Gypsy", feats2p$class), "Ty3",
+                            ifelse(grepl("CDS|intron", feats2p$class), "gene", "otherRepeat")))
+feats2p$class <- factor(feats2p$class, levels = c("gene", "otherRepeat", "Ty3", "Copia"))
+
+sw <- count_overlapsByGroup(regions = grid, features = feats2p)
+dt <- data.table(as.data.frame(sw))
+dt[,mid := (start + end)/2]
+xv <- linChrs$xStart; names(xv) <- linChrs$chr
+dt[,x := mid + xv[seqnames]]
+dt[,class := factor(class, levels = c("gene", "missing", "otherRepeat", "Ty3", "Copia"))]
+
+blks <- tst$blks
+blks[,`:=`(xStart = xv[seqnames] + start, xEnd = xv[seqnames] + end)]
+setkey(dt, class, seqnames, mid)
+dt[,grp2 := factor(paste(seqnames, class), levels = unique(paste(seqnames, class)))]
+
+p <- ggplot()+
+  geom_rect(data = linChrs, aes(xmin = xStart, xmax = xEnd, ymin = -0.2, ymax = -0.01))+
+  geom_rect(data = subset(blks, bestAssign == "subtelo"),
+            aes(xmin = xStart, xmax = xEnd, ymin = -0.18, ymax = -0.03),
+            col = NA, fill = "darkorange")+
+  geom_rect(data = subset(blks, bestAssign == "peric"),
+            aes(xmin = xStart, xmax = xEnd, ymin = -0.18, ymax = -0.03),
+            col = NA, fill = "darkblue")+
+  scale_y_continuous(limits = c(-.2, 1), expand = c(0,0))+
+  scale_x_continuous(expand = c(.001, .001), breaks = linChrs$mid, labels = linChrs$chr)+
+  geom_area(data = dt, aes(x = x, y = prop, group = grp2, fill = class))+
+  scale_fill_manual(values = c("darkorange3", "grey95", "skyblue", "dodgerblue", "dodgerblue4"))+
+  theme_genespace()
+
+
+
+
+
+
+ggplot()+
+  # geom_segment(data = tst$trained, aes(x = start, xend = end, y = fac2predict), col = "black", linewidth = 1)+
+  # geom_segment(data = tst$trained, aes(x = start, xend = end, y = fac2predict, col = fac2predict))+
+  geom_jitter(data = tst$predicted, aes(x = (start + end)/2, y = bestAssign, col = bestAssign), pch = ".")+
+  geom_segment(data = tst$blks, aes(x = start, xend = end, y = bestAssign), col = "black")+
+  facet_wrap(~seqnames, ncol = 1, scale = "free_x")
+
+
+
+
+
+
+
+
+
+
+# trainClasses$grp <- "train"
+
+
+
+fulld <- c(trainClasses, swClasses)
+
+tmp <- data.table(as.data.frame(fulld))
+tmp[,fac2predict := ifelse(grepl("subtelo", grp), "subtelo",
+                           ifelse(grepl("peric", grp), "pericen", grp))]
+
+levs <- c("subtelo", "pericen", "centromere")
+
+
+trainDat <- subset(tmp, fac2predict != "sw")
+trainDat[,fac2predict := factor(
+  fac2predict, levels = levs)]
+testDat <- subset(tmp, fac2predict == "sw")
+testDat[,fac2predict := NULL]
+
+# pc <- prcomp(tmp[,unique(fulld$class), with = F])
+# tmp <- data.table(tmp, pc$x)
+
+
+library(neuralnet)
+model = neuralnet(
+  fac2predict ~ CDS + Copia + Ty3 + missing + otherRepeat,
+  data = trainDat,
+  hidden = c(4,2),
+  linear.output = FALSE)
+
+conf <- data.table(trainDat, predict(model, trainDat))
+conf[,bestAssign := levs[apply(.SD, 1, which.max)], .SDcols = c("V1", "V2", "V3")]
+
+pred <- data.table(predict(model, testDat))
+setnames(pred, levs)
+predout <- data.table(testDat, pred)
+predout[,maxProb := apply(.SD, 1, max), .SDcols = levs]
+predout[,bestAssign := levs[apply(.SD, 1, which.max)], .SDcols = levs]
+predout$bestAssign[predout$maxProb < .9] <- "ambiguous"
+predout$maxProb[predout$maxProb < .9] <- .9
+
+ggplot()+
+  geom_segment(data = trainDat, aes(x = start, xend = end, y = fac2predict), col = "black", linewidth = 1)+
+  geom_segment(data = trainDat, aes(x = start, xend = end, y = fac2predict, col = fac2predict))+
+  geom_jitter(data = predout, aes(x = start, y = bestAssign, col = bestAssign), pch = ".")+
+  facet_wrap(~seqnames, ncol = 1, scale = "free_x")
+
+
+
+
+prediction_label <- data.frame(max.col(pred)) %>%
+  mutate(pred=labels[max.col.pred.]) %>%
+  select(2) %>%
+  unlist()
+
+table(test_data$Species, prediction_label)
+
+
+ggplot(tmp, aes(x = PC1, y = PC2, col = grp))+geom_point()
+library(GGally)
+ggpairs(
+  tmp,
+  columns = unique(fulld$class),
+  mapping = ggplot2::aes(color = grp))
+
+
+
+
+bin_genome <- function(features,
+                       dnaSS,
+                       centromeres,
+                       width = 1e6,
+                       step = 50e3,
+                       teloKmers = c("CCCGAAA", "CCCTAAA"),
+                       stripChrName = "\\s.*",
+                       buffer = 500e3,
+                       minGeneDensity4train = .1,
+                       trainWidth = width * 5){
+
+  # 1. sliding window feature density
+  names(dnaSS) <- gsub(stripChrName, "", names(dnaSS))
+  grid <- window_gr(x = dnaSS, width = width, step = step)
+  sw <- count_overlapsByGroup(grid, features)
+
+  linChrs <- linearize_chrCoords(
+    x = dnaSS,
+    stripChrName = stripChrName,
+    gapSize = 0)
+
+  linChrs[,]
+
+  trGr <-
+
+
+}
+
+
+
+
+grtp <- gr
+tmp <- grtp$class
+grtp$class <- ifelse(grepl("Copia", tmp), "Copia",
+                     ifelse(grepl("Gypsy", tmp), "Ty3",
+                            ifelse(grepl("CDS", tmp), "CDS",
+                                   ifelse(grepl("missing", tmp), "unannotated", "otherRepeat"))))
+
+plot_sw <- function(gr, linChrs, gapsize = 1e6, palette = c("darkred", "lightblue",)){
+  dt <- data.table(as.data.frame(grtp))
+  dt <- dt[,list(nbp = sum(nbp)), by = c("start", "end", "seqnames", "class", "region")]
+  dt[,mid := (start + end)/2]
+  dt[,tot := sum(nbp), by = "region"]
+  dt[,prop := nbp / tot]
+  dt[,grp := as.factor(class)]
+
+  xv <- linChrs$xStart; names(xv) <- linChrs$chr
+  dt[,x := mid + xv[seqnames]]
+  p <- ggplot()+
+    geom_rect(data = linChrs, aes(xmin = xStart, xmax = xEnd, ymin = -0.2, ymax = -0.01))+
+    scale_y_continuous(limits = c(-.2, 1), expand = c(0,0))+
+    geom_text(data = linChrs, aes(x = mid, label = chr), y = -0.1)+
+    geom_area(data = dt, aes(x = x, y = prop, group = paste(seqnames, grp), fill = grp))
+}
