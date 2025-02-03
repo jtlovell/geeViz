@@ -1,0 +1,12 @@
+# 1. For each genome, pull the files
+pull_namedPaths <- function(...){
+  fs <- list.files(...)
+  names(fs) <- basename(dirname(fs))
+  return(fs)
+}
+
+wd <- "/Users/jlovell/Desktop/pennycressCSP/genomes"
+assems <- pull_namedPaths(
+  path = wd, pattern = "0.fa.gz$", recursive = TRUE, full.names = T)
+genGffs <- pull_namedPaths(
+  path = wd, pattern = ".gene.gff3.gz$", recursive = TRUE, full.names = T)

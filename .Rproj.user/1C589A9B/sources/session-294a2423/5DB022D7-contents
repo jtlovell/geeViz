@@ -2,7 +2,75 @@
 
 # Do not use this package!!
 
-This release is a placeholder until a full package+documentation can be built
+If you really want to, go for it, but email JT Lovell for guidance. This release is a placeholder until a full package+documentation can be built.
+
+## Overview
+
+`geeViz` is a package of scripts that allow simple visualization and summaries of genome wide data. Several functions from `GENESPACE` and `DEEPSPACE` are included and will soon be exclusively available here. 
+
+The main things you can do:
+
+1. Extract, plot and summarize the positions of contigs, gaps, and telomeres in genome assembly .fasta files
+2. Sliding window density of genomic features
+3. Genomic classification - centromeres, peri-centromeres, sub-telomeric regions
+4. Riparian plots from paf files (coming v0.0.2)
+5. ... more soon
+
+## Functionality
+
+### Highest-level functions
+
+- `riparian_paf`: in its simplest implementation, takes a paf file and returns a two-genome riparian plot. If many paf files are supplied, requires a [query,target,pafFilePath] input format, and makes a daisy-chained plot across the specified 'genomeIDs'. 
+- `density_genome`: in its simplest implementation, takes a GRanges object and plots the amount of sequence as an area plot, which works best with output from `count_ovlpsByGrp`. However, this function can also take many GRanges objects and produce stacked density plots, which can be overlaid onto a riparian plot. Options also exist for direct import of gff3-formatted annotation files and assembly fastas, which can accomplish this analysis with a single line of R code. 
+- `classify_genome`: trains a neural net model and predicts the probability that a sequence is on the chromosome arms or in pericentromeric intervals. 
+
+### Main functions (GRanges/DNAStringSet --> GRanges)
+
+- `slide_window`: similar to `GenomicRanges::slidingWindow` but allows non-overlapping intervals and a variety of input and output formats
+- `count_ovlps`: takes two GRanges objects ('regions' and 'features') and counts the bases in features ranges within each region. This function can be used directly, or within the wrapper `count_ovlpByGrp`, where the 'features' GRanges object is processed so that no base is assigned to two ranges ('reduced') and made 'hierarchical', so that members of groups specified in the first elementMetadata column. In this case, each 'region' is classified into each group and a 'missing' range count is also returned. 
+
+### kmer-based sequence detection (DNAStringSet --> GRanges)
+
+- `find_telomeres`: find telomeric kmer matches and ask if sequences start/end are capped with telomeres. 
+- `find_centromeres`: find putative centromeres defined by the density of exact matches to known centromeric repeats.
+- `find_gaps`: pull positions of gaps between contigs
+- `find_contigs`: pull positions of contigs
+
+### Other basic functionalities
+
+- `learn_chrArms`: neural net classification of pericentromeres and chromosome arms
+
+
+
+
+
+
+
+## find_telomeres
+
+Parameters:
+
+- `dnaSS`: target sequence, stored as a DNAStringSet object
+- `width`: size (bp) of window to look within
+- `nMatch`: number of matching bases within window 
+- `minDist`: minimum distance (bp) from sequence termini for a sequence to be 'capped' with a telomere. 
+- `nearDist`: minimum distances from terminus for a telomere to be called 'nearEnd'.
+- `telomereKmers`: 'plant' = CCCGAAA/CCCTAAA, 'animal' = XXXX/XXXX, 'xxx' = XXXX/XXXX, or a DNAStringSet object with custom kmers. 
+
+Functionality/output:
+
+- Extract all positions of exact `telomereKmers` matches. 
+- Determine if each terminus of each sequence is capped with a telomere of sufficient size and density. Sequences on termini are classified into:
+    - "absent": no kmers within `minDist` of sequence terminus
+    - "present": > `nMatch` within `width` of terminus
+    - "incomplete": !present && !absent 
+- Find "interstitial" telomere sequences defined as:
+    - "nearEnd": > `nMatch` in `width` <= `nearDist` from terminus
+    - "sparse": > `nMatch` of matches in 1kb of sequence > `minDist` from terminus
+    - "interstitial": > `nMatch` of matches in `width` > `minDist` from terminus
+
+### `find_centromeres`
+
 
 ### Classify genome
 

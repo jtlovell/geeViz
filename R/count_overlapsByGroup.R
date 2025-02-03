@@ -63,6 +63,8 @@ count_overlapsByGroup <- function(features, regions){
 
   # -- overlap join the regions and features
   fo <- foverlaps(dtx, dty)
+  # print(subset(dty, index == "region184"))
+  # print(dtx)
   fo <- subset(fo, complete.cases(fo))
 
   # -- do the truncation of the ranges
@@ -83,15 +85,11 @@ count_overlapsByGroup <- function(features, regions){
             by = c("chr", "start", "end", "classy", "classx", "index")]
 
   # -- ensure all unique combinations of classes are in there
-  ucomb <- data.table(
-    CJ(index = unique(dty$index),
-       classx = unique(dtx$classx)))
-  out <- merge(
-    foo[,c("chr", "start", "end", "classy", "index")],
-    ucomb, by = "index",
-    allow.cartesian = TRUE, all = T)
-  out <- subset(out, !duplicated(out))
-  out <- merge(foo, out, by = names(out), all = T)
+  cls <- as.character(unique(dtx$classx))
+  ucomb <- dty[,list(classx = cls, nbp = 0),
+               by = c("chr", "start", "end", "classy", "index")]
+  out <- rbind(foo, ucomb)
+  out <- subset(out, !duplicated(out[,1:6]))
   setkey(out, chr, start, end, classx, classy)
 
   # -- add 0's where no values exist

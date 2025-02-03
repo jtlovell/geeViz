@@ -1,0 +1,72 @@
+chrNamesStrip <- "\\s.*"
+
+chrNamesStrip <- "\\s.*" 
+assemFaFile <- "/Users/jlovell/Desktop/pennycressCSP/genomes/MN106/Tarvensevar_MN106_872_v4.0.fa.gz"
+ss <- Biostrings::readDNAStringSet(assemFaFile)
+names(ss) <- gsub(chrNamesStrip, "", names(ss))
+
+
+geneGff3File <- "/Users/jlovell/Desktop/pennycressCSP/genomes/MN106/Tarvensevar_MN106_872_v4.1.gene.gff3.gz"
+geneGr <- read_gffAsGr(
+  gff3File = geneGff3File,
+  filter = list(type = c("CDS", "gene")),
+  reduceIt = TRUE, 
+  extraCol2keep = "type")
+geneGr$type[geneGr$type == "gene"] <- "intron"
+
+repGff3File <- "/Users/jlovell/Desktop/pennycressCSP/panEDTA_annotations_October/Tarvensevar_MN106_872_v4.0.fa.mod.EDTA.intact.gff3"
+repGr <- read_gffAsGr(
+  gff3File = repGff3File,
+  extraCol2keep = "Classification",
+  reduceIt = TRUE)
+repGr$type <- gsub("/","_",repGr$Classification, fixed = T)
+repGr$Classification <- NULL
+
+feats <- c(geneGr, repGr)
+featureOrder <- unique(feats$type)
+
+wh <- c(grep("CDS|EXON", toupper(featureOrder)),
+        grep("CENK", toupper(featureOrder)),
+        grep("CDS|EXON|CENK|UNKNOWN|INTRON", toupper(featureOrder), invert = T),
+        grep("INTRON", toupper(featureOrder)),
+        grep("UNKNOWN", toupper(featureOrder)))
+wh <- wh[!duplicated(wh)]
+if(length(wh) < length(featureOrder)){
+  al <- 1:length(featureOrder)
+  mis <- al[!al %in% wh]
+  wh <- c(wh, mis)
+}
+featureOrder <- featureOrder[wh]
+
+feats$type <- factor(feats$type, levels = featureOrder)
+feats <- feats[order(feats$type),]
+feats$type <- as.character(feats$type)
+feats$type <- gsub("[^[:alnum:] ]", "", feats$type)
+
+featsH <- make_hierarchical(feats)
+
+
+cenRegFile <-  "/Users/jlovell/Desktop/pennycressCSP/Thlaspi_centromere_candidate_regions20241202.csv"
+cenRegs <- fread(
+  cenRegFile,
+  select = c(1:4), col.names = c("seqnames", "start", "end", "genome"))
+cenRegs[,width := end - start]
+setorder(cenRegs, genome, seqnames, -width)
+cenRegs <- subset(cenRegs, !duplicated(paste(genome, seqnames)))
+cens <- makeGRangesFromDataFrame(subset(cenRegs, genome == "MN106"))
+cens$grp <- "centromere"
+
+classd <- classify_genome(
+  featuresGr = featsH,
+  trainingGr = NULL,
+  dnaSS = ss,
+  # maskGr = cens2mask,
+  centromeres = cens,
+  width = 200e3,
+  step = 10e3, 
+  teloBuffer = 10e3, 
+  centroBuffer = 1e6,
+  trainWidth = 3e6,
+  minProb2assign = .75, 
+  ignoreCentromeres = T)
+
